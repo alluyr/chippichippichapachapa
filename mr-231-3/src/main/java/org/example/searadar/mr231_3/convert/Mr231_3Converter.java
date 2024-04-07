@@ -1,8 +1,9 @@
 package org.example.searadar.mr231_3.convert;
 
-import org.apache.camel.Exchange;
-import ru.oogis.searadar.api.convert.SearadarExchangeConverter;
-import ru.oogis.searadar.api.message.*;
+import ru.oogis.searadar.api.message.InvalidMessage;
+import ru.oogis.searadar.api.message.RadarSystemDataMessage;
+import ru.oogis.searadar.api.message.SearadarStationMessage;
+import ru.oogis.searadar.api.message.TrackedTargetMessage;
 import ru.oogis.searadar.api.types.IFF;
 import ru.oogis.searadar.api.types.TargetStatus;
 import ru.oogis.searadar.api.types.TargetType;
@@ -11,20 +12,23 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
-public class Mr231Converter implements SearadarExchangeConverter {
+/**
+ * Конвертер сообщений для формата МР-231-3.
+ */
+public class Mr231_3Converter {
 
     private static final Double[] DISTANCE_SCALE = {0.125, 0.25, 0.5, 1.5, 3.0, 6.0, 12.0, 24.0, 48.0, 96.0};
-
     private String[] fields;
     private String msgType;
 
-    @Override
-    public List<SearadarStationMessage> convert(Exchange exchange) {
-        return convert(exchange.getIn().getBody(String.class));
-    }
-
+    /**
+     * Конвертирует сообщение в список объектов SearadarStationMessage.
+     * @param message входное сообщение для конвертации
+     * @return список объектов SearadarStationMessage, представляющих сконвертированные данные
+     */
     public List<SearadarStationMessage> convert(String message) {
 
         List<SearadarStationMessage> msgList = new ArrayList<>();
@@ -33,19 +37,15 @@ public class Mr231Converter implements SearadarExchangeConverter {
 
         switch (msgType) {
 
-            case "TTM" : msgList.add(getTTM());
-                break;
-
-            case "VHW" : msgList.add(getVHW());
+            case "TTM" :
+                msgList.add(getTTM());
                 break;
 
             case "RSD" : {
-
                 RadarSystemDataMessage rsd = getRSD();
                 InvalidMessage invalidMessage = checkRSD(rsd);
 
-                if (invalidMessage != null)  msgList.add(invalidMessage);
-                else msgList.add(rsd);
+                msgList.add(Objects.requireNonNullElse(invalidMessage, rsd));
                 break;
             }
 
@@ -54,7 +54,7 @@ public class Mr231Converter implements SearadarExchangeConverter {
         return msgList;
     }
 
-
+    /** Чтение полей из сообщения */
     private void readFields(String msg) {
 
         String temp = msg.substring( 3, msg.indexOf("*") ).trim();
@@ -64,37 +64,32 @@ public class Mr231Converter implements SearadarExchangeConverter {
 
     }
 
+    /**
+     * Получение сообщения типа TTM (Tracked Target Message).
+     * @return объект TrackedTargetMessage, представляющий сообщение типа TTM
+     */
     private TrackedTargetMessage getTTM() {
-
         TrackedTargetMessage ttm = new TrackedTargetMessage();
         Long msgRecTimeMillis = System.currentTimeMillis();
 
         ttm.setMsgTime(msgRecTimeMillis);
-        TargetStatus status = TargetStatus.UNRELIABLE_DATA;
         IFF iff = IFF.UNKNOWN;
+        TargetStatus status = TargetStatus.UNRELIABLE_DATA;
         TargetType type = TargetType.UNKNOWN;
 
-        switch (fields[12]) {
-            case "L" : status = TargetStatus.LOST;
-                break;
+        iff = switch (fields[11]) {
+            case "b" -> IFF.FRIEND;
+            case "p" -> IFF.FOE;
+            case "d" -> IFF.UNKNOWN;
+            default -> iff;
+        };
 
-            case "Q" : status = TargetStatus.UNRELIABLE_DATA;
-                break;
-
-            case "T" : status = TargetStatus.TRACKED;
-                break;
-        }
-
-        switch (fields[11]) {
-            case "b" : iff = IFF.FRIEND;
-                break;
-
-            case "p" : iff = IFF.FOE;
-                break;
-
-            case "d" : iff = IFF.UNKNOWN;
-                break;
-        }
+        status = switch (fields[12]) {
+            case "L" -> TargetStatus.LOST;
+            case "Q" -> TargetStatus.UNRELIABLE_DATA;
+            case "T" -> TargetStatus.TRACKED;
+            default -> status;
+        };
 
         ttm.setMsgRecTime(new Timestamp(System.currentTimeMillis()));
         ttm.setTargetNumber(Integer.parseInt(fields[1]));
@@ -110,24 +105,16 @@ public class Mr231Converter implements SearadarExchangeConverter {
         return ttm;
     }
 
-    private WaterSpeedHeadingMessage getVHW() {
-
-        WaterSpeedHeadingMessage vhw = new WaterSpeedHeadingMessage();
-
-        vhw.setMsgRecTime(new Timestamp(System.currentTimeMillis()));
-        vhw.setCourse(Double.parseDouble(fields[1]));
-        vhw.setCourseAttr(fields[2]);
-        vhw.setSpeed(Double.parseDouble(fields[5]));
-        vhw.setSpeedUnit(fields[6]);
-
-        return vhw;
-    }
-
+    /**
+     * Получение сообщения типа RSD (RadarSystemDataMessage).
+     * @return объект RadarSystemDataMessage, представляющий сообщение типа RSD
+     */
     private RadarSystemDataMessage getRSD() {
 
         RadarSystemDataMessage rsd = new RadarSystemDataMessage();
 
         rsd.setMsgRecTime(new Timestamp(System.currentTimeMillis()));
+
         rsd.setInitialDistance(Double.parseDouble(fields[1]));
         rsd.setInitialBearing(Double.parseDouble(fields[2]));
         rsd.setMovingCircleOfDistance(Double.parseDouble(fields[3]));
@@ -140,8 +127,14 @@ public class Mr231Converter implements SearadarExchangeConverter {
         rsd.setWorkingMode(fields[14]);
 
         return rsd;
+
     }
 
+    /**
+     * Проверка сообщения типа RSD (RadarSystemDataMessage) на корректность.
+     * @param rsd объект RadarSystemDataMessage для проверки
+     * @return объект InvalidMessage, если сообщение некорректно, иначе null
+     */
     private InvalidMessage checkRSD(RadarSystemDataMessage rsd) {
 
         InvalidMessage invalidMessage = new InvalidMessage();
@@ -158,3 +151,5 @@ public class Mr231Converter implements SearadarExchangeConverter {
     }
 
 }
+
+

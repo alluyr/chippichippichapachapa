@@ -2,8 +2,8 @@ package org.example.searadar.mr231.station;
 
 import org.apache.mina.filter.codec.textline.LineDelimiter;
 import org.apache.mina.filter.codec.textline.TextLineCodecFactory;
-import org.example.searadar.mr231_3.convert.Mr231Converter;
 
+import org.example.searadar.mr231.convert.Mr231Converter;
 import ru.oogis.searadar.api.convert.SearadarExchangeConverter;
 import ru.oogis.searadar.api.station.AbstractStationType;
 
